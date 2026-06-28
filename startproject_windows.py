@@ -2,12 +2,14 @@
 # ═══════════════════════════════════════════════════════════════
 # Flask Project Generator - Gerador de Projetos Flask Modular
 # Criador: Allan José (Al4xs) - code.allan
-# Versão: 2.0 (Python - multiplataforma)
+# Versão: 2.1 (Python - multiplataforma, auto-instalável)
 # ═══════════════════════════════════════════════════════════════
 
 import sys
 import os
+import shutil
 import argparse
+import sysconfig
 from pathlib import Path
 
 # ─── Suporte a cores ANSI no Windows ───────────────────────────
@@ -94,7 +96,19 @@ def show_help():
     print()
     print(f"  {c('GREEN', '-h, --help')}              Mostra esta mensagem de ajuda")
     print()
+    print(f"{bold(c('CYAN', 'INSTALAÇÃO NO SISTEMA:'))}")
+    print(f"  {c('GREEN', '--install')}               Instala o comando {bold('startproject')} globalmente")
+    print(f"                          {c('CYAN', 'Rode UMA vez e use de qualquer pasta!')}")
+    print(f"                          {c('CYAN', 'Linux/macOS → ~/.local/bin/startproject')}")
+    print(f"                          {c('CYAN', 'Windows     → Scripts do Python + .bat')}")
+    print()
+    print(f"  {c('GREEN', '--uninstall')}             Remove o comando do sistema")
+    print()
     print(f"{bold(c('CYAN', 'EXEMPLOS DE USO:'))}")
+    print()
+    print(f"  {ROCKET} {c('YELLOW', 'Instalar (apenas uma vez):')}")
+    print( "     python startproject.py --install")
+    print(f"     {c('CYAN', '→ Depois disso: startproject meuapp (de qualquer pasta)')}")
     print()
     print(f"  {PAINT} {c('YELLOW', 'Projeto simples:')}")
     print( "     python startproject.py meuapp")
@@ -141,6 +155,203 @@ def show_help():
     print(f"  {c('YELLOW', '4.')} Acesse: {c('GREEN', 'http://localhost:5000')}")
     print()
     sys.exit(0)
+
+# ─── Instalação global ──────────────────────────────────────────
+def _scripts_dir() -> Path:
+    """Retorna o diretório Scripts do Python atual (cross-platform)."""
+    return Path(sysconfig.get_path("scripts"))
+
+def _local_bin() -> Path:
+    """~/.local/bin — diretório padrão do usuário no Linux/macOS."""
+    return Path.home() / ".local" / "bin"
+
+def _shell_configs() -> list:
+    """Lista de arquivos de configuração de shell comuns no Linux/macOS."""
+    home = Path.home()
+    candidates = [
+        home / ".bashrc",
+        home / ".bash_profile",
+        home / ".zshrc",
+        home / ".profile",
+    ]
+    return [p for p in candidates if p.exists()]
+
+def _path_export_line() -> str:
+    return 'export PATH="$HOME/.local/bin:$PATH"'
+
+def install():
+    this_file = Path(__file__).resolve()
+    print()
+    print(f"{bold(c('MAGENTA', '╔════════════════════════════════════════════════════════════════╗'))}")
+    print(f"{bold(c('MAGENTA', '║'))}  {ROCKET} {bold(c('CYAN', 'INSTALANDO startproject NO SISTEMA'))}              {bold(c('MAGENTA', '║'))}")
+    print(f"{bold(c('MAGENTA', '╚════════════════════════════════════════════════════════════════╝'))}")
+    print()
+
+    if sys.platform == "win32":
+        _install_windows(this_file)
+    else:
+        _install_unix(this_file)
+
+def _install_windows(this_file: Path):
+    scripts = _scripts_dir()
+    dest_py  = scripts / "startproject.py"
+    dest_bat = scripts / "startproject.bat"
+
+    # Copia o .py para Scripts do Python
+    try:
+        scripts.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(this_file, dest_py)
+        print(f"{CHECKMARK} Copiado para: {c('GREEN', str(dest_py))}")
+    except PermissionError:
+        print(f"{ERROR_SYM} {c('RED', 'Sem permissão para escrever em:')} {scripts}")
+        print(f"   {c('YELLOW', 'Tente rodar o prompt como Administrador.')}")
+        sys.exit(1)
+
+    # Cria o .bat que chama o .py
+    # Tenta `py -3` (launcher do Windows, mais confiável),
+    # com fallback para `python` caso o launcher não exista.
+    bat_content = (
+        "@echo off\r\n"
+        "where py >nul 2>&1\r\n"
+        "if %errorlevel%==0 (\r\n"
+        '    py -3 "%~dp0startproject.py" %*\r\n'
+        ") else (\r\n"
+        '    python "%~dp0startproject.py" %*\r\n'
+        ")\r\n"
+    )
+    dest_bat.write_text(bat_content, encoding="utf-8")
+    print(f"{CHECKMARK} Atalho criado: {c('GREEN', str(dest_bat))}")
+
+    # Verifica se Scripts já está no PATH
+    path_env = os.environ.get("PATH", "")
+    if str(scripts).lower() not in path_env.lower():
+        print()
+        print(f"{WARNING} {c('YELLOW', 'O diretório Scripts pode não estar no PATH.')}")
+        print(f"   Se o comando não funcionar, adicione manualmente ao PATH:")
+        print(f"   {c('CYAN', str(scripts))}")
+        print()
+        print(f"   {c('YELLOW', 'Como adicionar no Windows:')}")
+        print(f"   1. Pesquise 'variáveis de ambiente' no menu Iniciar")
+        print(f"   2. Clique em 'Variáveis de Ambiente'")
+        print(f"   3. Em 'Path' (usuário), clique em Editar → Novo")
+        print(f"   4. Cole: {c('GREEN', str(scripts))}")
+    else:
+        print(f"{CHECKMARK} {c('GREEN', 'Diretório já está no PATH.')}")
+
+    print()
+    print(f"{bold(c('GREEN', '╔════════════════════════════════════════════════════════════════╗'))}")
+    print(f"{bold(c('GREEN', '║'))}  {CHECKMARK} {bold(c('GREEN', 'INSTALADO COM SUCESSO!'))}                              {bold(c('GREEN', '║'))}")
+    print(f"{bold(c('GREEN', '╚════════════════════════════════════════════════════════════════╝'))}")
+    print()
+    print(f"   {c('CYAN', 'Abra um novo terminal e teste:')}")
+    print(f"   {c('YELLOW', 'startproject meuapp')}")
+    print()
+
+def _install_unix(this_file: Path):
+    dest_dir = _local_bin()
+    dest     = dest_dir / "startproject"
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Lê o conteúdo atual e garante shebang correto
+    content = this_file.read_text(encoding="utf-8")
+    if not content.startswith("#!/usr/bin/env python3"):
+        content = "#!/usr/bin/env python3\n" + content
+
+    dest.write_text(content, encoding="utf-8")
+    dest.chmod(0o755)
+    print(f"{CHECKMARK} Instalado em: {c('GREEN', str(dest))}")
+
+    # Verifica se ~/.local/bin está no PATH (normaliza slashes para evitar falso negativo)
+    path_env = os.environ.get("PATH", "")
+    dest_dir_resolved = dest_dir.resolve()
+    in_path = any(
+        dest_dir_resolved == Path(p.rstrip("/")).resolve()
+        for p in path_env.split(":")
+        if p
+    )
+
+    if not in_path:
+        export_line = _path_export_line()
+        print()
+        print(f"{WARNING} {c('YELLOW', '~/.local/bin não está no seu PATH ainda.')}")
+        print(f"   Adicionando automaticamente aos seus arquivos de shell...")
+
+        added = False
+        for cfg in _shell_configs():
+            text = cfg.read_text(encoding="utf-8")
+            if export_line not in text:
+                cfg.write_text(text.rstrip() + f"\n\n# startproject — adicionado pelo instalador\n{export_line}\n",
+                               encoding="utf-8")
+                print(f"   {CHECKMARK} Adicionado em: {c('GREEN', str(cfg))}")
+                added = True
+
+        if not added:
+            # Cria ~/.bashrc se nada existir
+            bashrc = Path.home() / ".bashrc"
+            bashrc.write_text(f"# startproject — adicionado pelo instalador\n{export_line}\n",
+                              encoding="utf-8")
+            print(f"   {CHECKMARK} Criado: {c('GREEN', str(bashrc))}")
+
+        print()
+        print(f"   {c('CYAN', 'Para ativar na sessão atual, rode:')}")
+        print(f"   {c('YELLOW', f'source ~/.bashrc')}  {c('CYAN', '(ou abra um novo terminal)')}")
+    else:
+        print(f"{CHECKMARK} {c('GREEN', '~/.local/bin já está no PATH.')}")
+
+    print()
+    print(f"{bold(c('GREEN', '╔════════════════════════════════════════════════════════════════╗'))}")
+    print(f"{bold(c('GREEN', '║'))}  {CHECKMARK} {bold(c('GREEN', 'INSTALADO COM SUCESSO!'))}                              {bold(c('GREEN', '║'))}")
+    print(f"{bold(c('GREEN', '╚════════════════════════════════════════════════════════════════╝'))}")
+    print()
+    print(f"   {c('CYAN', 'Abra um novo terminal (ou dê source) e teste:')}")
+    print(f"   {c('YELLOW', 'startproject meuapp')}")
+    print()
+
+def uninstall():
+    print()
+    print(f"{bold(c('MAGENTA', '╔════════════════════════════════════════════════════════════════╗'))}")
+    print(f"{bold(c('MAGENTA', '║'))}  {WARNING} {bold(c('YELLOW', 'REMOVENDO startproject DO SISTEMA'))}               {bold(c('MAGENTA', '║'))}")
+    print(f"{bold(c('MAGENTA', '╚════════════════════════════════════════════════════════════════╝'))}")
+    print()
+
+    removed_any = False
+
+    if sys.platform == "win32":
+        scripts = _scripts_dir()
+        for name in ("startproject.py", "startproject.bat", "startproject.cmd"):
+            target = scripts / name
+            if target.exists():
+                target.unlink()
+                print(f"{CHECKMARK} Removido: {c('GREEN', str(target))}")
+                removed_any = True
+    else:
+        target = _local_bin() / "startproject"
+        if target.exists():
+            target.unlink()
+            print(f"{CHECKMARK} Removido: {c('GREEN', str(target))}")
+            removed_any = True
+
+        # Remove a linha do PATH dos configs de shell
+        export_line = _path_export_line()
+        comment_line = "# startproject — adicionado pelo instalador"
+        for cfg in _shell_configs():
+            text = cfg.read_text(encoding="utf-8")
+            if export_line in text:
+                cleaned = text.replace(f"\n\n{comment_line}\n{export_line}\n", "\n")
+                cleaned = cleaned.replace(f"\n{comment_line}\n{export_line}\n", "\n")
+                cleaned = cleaned.replace(f"{comment_line}\n{export_line}\n", "")
+                cfg.write_text(cleaned, encoding="utf-8")
+                print(f"{CHECKMARK} PATH removido de: {c('GREEN', str(cfg))}")
+
+    if not removed_any:
+        print(f"{WARNING} {c('YELLOW', 'Nenhuma instalação encontrada.')}")
+    else:
+        print()
+        print(f"{bold(c('GREEN', '╔════════════════════════════════════════════════════════════════╗'))}")
+        print(f"{bold(c('GREEN', '║'))}  {CHECKMARK} {bold(c('GREEN', 'DESINSTALADO COM SUCESSO!'))}                           {bold(c('GREEN', '║'))}")
+        print(f"{bold(c('GREEN', '╚════════════════════════════════════════════════════════════════╝'))}")
+    print()
 
 # ─── Escrita de arquivos ─────────────────────────────────────────
 def write(path: Path, content: str):
@@ -647,6 +858,14 @@ class CustomParser(argparse.ArgumentParser):
 def parse_args():
     # Pré-processamento manual para suportar -D e --api sem argparse completo
     args = sys.argv[1:]
+
+    # Intercepta --install / --uninstall antes de qualquer outra coisa
+    if args and args[0] == "--install":
+        install()
+        sys.exit(0)
+    if args and args[0] == "--uninstall":
+        uninstall()
+        sys.exit(0)
 
     if not args or args[0] in ("-h", "--help"):
         show_help()
