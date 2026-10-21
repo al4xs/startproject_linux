@@ -4,6 +4,7 @@
 # Criador: Allan José (Al4xs) - code.allan
 # Versão: 2.1 (Python - multiplataforma, auto-instalável)
 # ═══════════════════════════════════════════════════════════════
+# 21/10/2026
 
 import sys
 import os
