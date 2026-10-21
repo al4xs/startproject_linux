@@ -10,6 +10,10 @@ import os
 import shutil
 import argparse
 import sysconfig
+import json
+import keyword
+import re
+import secrets
 from pathlib import Path
 
 # ─── Suporte a cores ANSI no Windows ───────────────────────────
@@ -124,7 +128,7 @@ def show_help():
     print()
     print(f"  {LOCK} {c('YELLOW', 'App com autenticação:')}")
     print( "     python startproject.py authapp -r home,dashboard -D User --login login")
-    print(f"     {c('CYAN', '→ Sistema completo de login/logout')}")
+    print(f"     {c('CYAN', '→ Base simples de autenticação e logout')}")
     print()
     print(f"  {PAINT} {c('YELLOW', 'Site moderno com Tailwind:')}")
     print( "     python startproject.py modernapp -r home,about -D User --tailwind cdn")
@@ -364,28 +368,45 @@ def append(path: Path, content: str):
         f.write(content)
 
 # ─── Geração de conteúdo ────────────────────────────────────────
-def models_import(models):
-    return ", ".join(models)
-
-def gen_main_py(db, login, login_name, models):
-    lines = ["from flask import Flask", "from routes import blueprints"]
+def gen_main_py(db, login, login_name):
+    lines = [
+        "import os",
+        "from flask import Flask",
+        "from dotenv import load_dotenv",
+        "",
+    ]
     if db and login:
-        lines.append("from extensions import db, login_manager")
+        lines += [
+            "from routes import blueprints",
+            "from extensions import db, login_manager",
+        ]
     elif db:
-        lines.append("from extensions import db")
-    lines.append("")
-    lines.append("app = Flask(__name__)")
+        lines += [
+            "import models  # Registra os models no metadata do SQLAlchemy",
+            "from extensions import db",
+            "from routes import blueprints",
+        ]
+    elif login:
+        lines += [
+            "from routes import blueprints",
+            "from extensions import login_manager",
+        ]
+    else:
+        lines.append("from routes import blueprints")
+    lines += ["", "load_dotenv()", "", "app = Flask(__name__)"]
+    lines.append('\napp.secret_key = os.getenv("SECRET_KEY")')
     lines.append("")
     if db:
-        lines.append('app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///dados.db"')
+        lines.append('app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///database.db"')
         lines.append('app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False')
-    lines.append('app.secret_key = "altere-sua-secret-key-aqui"')
-    lines.append("")
     if db:
+        lines.append("")
         lines.append("db.init_app(app)")
     if db and login:
-        lines.append("login_manager.init_app(app)")
+        lines.append("\nlogin_manager.init_app(app)")
         lines.append(f'login_manager.login_view = "{login_name}.{login_name}"')
+    elif login:
+        lines.append("login_manager.init_app(app)")
     lines.append("")
     lines.append("for bp in blueprints:")
     lines.append("    app.register_blueprint(bp)")
@@ -394,7 +415,7 @@ def gen_main_py(db, login, login_name, models):
     if db:
         lines.append("    with app.app_context():")
         lines.append("        db.create_all()")
-    lines.append('    app.run(host="0.0.0.0", port=5000, debug=True)')
+    lines.append("    app.run(debug=True)")
     return "\n".join(lines) + "\n"
 
 def gen_routes_init(rotas, login, login_name):
@@ -412,11 +433,8 @@ def gen_routes_init(rotas, login, login_name):
     lines.append("]")
     return "\n".join(lines) + "\n"
 
-def gen_route_py_api(rota, db, models):
+def gen_route_py_api(rota):
     lines = ["from flask import Blueprint, jsonify"]
-    if db:
-        lines.append("from extensions import db")
-        lines.append(f"from models import {models_import(models)}")
     lines.append("")
     lines.append(f'{rota}_bp = Blueprint("{rota}", __name__)')
     lines.append("")
@@ -425,11 +443,8 @@ def gen_route_py_api(rota, db, models):
     lines.append(f'    return jsonify({{"message": "API da rota {rota} funcionando!"}})')
     return "\n".join(lines) + "\n"
 
-def gen_route_py_html(rota, db, models, tailwind):
+def gen_route_py_html(rota, tailwind):
     lines = ["from flask import Blueprint, render_template"]
-    if db:
-        lines.append("from extensions import db")
-        lines.append(f"from models import {models_import(models)}")
     lines.append("")
     is_home = rota == "home"
     if tailwind:
@@ -441,7 +456,7 @@ def gen_route_py_html(rota, db, models, tailwind):
         if is_home:
             lines.append(f'{rota}_bp = Blueprint("{rota}", __name__, template_folder="templates", static_folder="static", static_url_path="/{rota}/static")')
         else:
-            lines.append(f'{rota}_bp = Blueprint("{rota}", __name__, template_folder="templates", static_folder="static", static_url_path="/{rota}/static", url_prefix="/{rota}")')
+            lines.append(f'{rota}_bp = Blueprint("{rota}", __name__, template_folder="templates", static_folder="static", static_url_path="/static", url_prefix="/{rota}")')
     lines.append("")
     lines.append(f'@{rota}_bp.route("/")')
     lines.append(f"def {rota}():")
@@ -450,74 +465,63 @@ def gen_route_py_html(rota, db, models, tailwind):
 
 def gen_template_tailwind_cdn(rota):
     return f"""\
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+{{% extends "base.html" %}}
 
-    <title>Página {rota}</title>
-</head>
+{{% block title %}}{rota.capitalize()}{{% endblock %}}
 
-<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center">
-    <div class="text-center">
-        <h1 class="text-4xl font-bold text-green-400 mb-4">
-            ✨ Rota {rota} criada com sucesso!
-        </h1>
-        <p class="text-gray-300">
-            Powered by Flask + Tailwind CSS
-        </p>
-    </div>
-
-    <script src="https://cdn.tailwindcss.com" defer></script>
-</body>
-</html>
+{{% block content %}}
+{{% endblock %}}
 """
 
 def gen_template_tailwind_build(rota):
     return f"""\
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+{{% extends "base.html" %}}
 
-    <title>Página {rota}</title>
+{{% block title %}}{rota.capitalize()}{{% endblock %}}
 
-    <link rel="stylesheet" href="{{{{ url_for('static', filename='css/output.css') }}}}">
-</head>
-
-<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center">
-    <div class="text-center">
-        <h1 class="text-4xl font-bold text-green-400 mb-4">
-            ✨ Rota {rota} criada com sucesso!
-        </h1>
-        <p class="text-gray-300">
-            Powered by Flask + Tailwind CSS (Build)
-        </p>
-    </div>
-</body>
-</html>
+{{% block content %}}
+{{% endblock %}}
 """
 
 def gen_template_plain(rota):
     return f"""\
+{{% extends "base.html" %}}
+
+{{% block title %}}{rota.capitalize()}{{% endblock %}}
+
+{{% block head %}}
+<link rel="stylesheet" href="{{{{ url_for('{rota}.static', filename='css/style.css') }}}}">
+{{% endblock %}}
+
+{{% block content %}}
+{{% endblock %}}
+"""
+
+def gen_base_template(tailwind_type=None):
+    if tailwind_type == "cdn":
+        stylesheet = '    <script src="https://cdn.tailwindcss.com" defer></script>\n'
+    elif tailwind_type == "build":
+        stylesheet = """    <link rel="stylesheet" href="{{ url_for('static', filename='css/output.css') }}">\n"""
+    else:
+        stylesheet = ""
+
+    return """\
 <!DOCTYPE html>
 <html lang="pt-br">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>Página {rota}</title>
+    <title>{% block title %}{% endblock %}</title>
 
-    <link rel="stylesheet" href="{{{{ url_for('{rota}.static', filename='css/style.css') }}}}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/output.css') }}">
 </head>
 
 <body>
-    <div class="container">
-        <h1>Olá, rota {rota} criada com sucesso!</h1>
-    </div>
+    {% block content %}{% endblock %}
 </body>
+
 </html>
 """
 
@@ -540,33 +544,50 @@ h1 {
 """
 
 # ─── Login blueprints ────────────────────────────────────────────
+def _gen_user_loader(first_model):
+    return f"""\
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get({first_model}, int(user_id))
+"""
+
 def gen_login_py_api(login_name, models):
     first_model = models[0]
     return f"""\
 from flask import Blueprint, jsonify, request
 from flask_login import login_user, logout_user, login_required
-from models import {models_import(models)}
-from extensions import login_manager
+from werkzeug.security import check_password_hash
+
+from extensions import db, login_manager
+from models import {first_model}
 
 {login_name}_bp = Blueprint("{login_name}", __name__)
 
-@login_manager.user_loader
-def load_user(user_id):
-    return {first_model}.query.get(int(user_id))
+@login_manager.unauthorized_handler
+def unauthorized():
+    return jsonify({{"success": False, "message": "Autenticação necessária"}}), 401
 
+{_gen_user_loader(first_model)}
 @{login_name}_bp.route("/{login_name}", methods=["POST"])
 def {login_name}():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {{}}
+    if not isinstance(data, dict):
+        data = {{}}
     username = data.get("username")
     password = data.get("password")
+    
+    if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or not password:
+        return jsonify({{"success": False, "message": "Usuário e senha são obrigatórios"}}), 400
 
-    if username and password:
-        user = {first_model}.query.filter_by(username=username).first()
-        if user:
-            login_user(user)
-            return jsonify({{"success": True, "message": "Login realizado com sucesso", "user": {{"id": user.id, "username": user.username}}}})
+    username = username.strip()
+    user = {first_model}.query.filter_by(username=username).first()
+    
+    if user is None or not check_password_hash(user.password_hash, password):
+        return jsonify({{"success": False, "message": "Credenciais inválidas"}}), 401
 
-    return jsonify({{"success": False, "message": "Credenciais inválidas"}}), 401
+    login_user(user)
+    return jsonify({{"success": True, "message": "Login realizado com sucesso",
+                    "user": {{"id": user.id, "username": user.username}}}})
 
 @{login_name}_bp.route("/logout", methods=["POST"])
 @login_required
@@ -575,197 +596,99 @@ def logout():
     return jsonify({{"success": True, "message": "Logout realizado com sucesso"}})
 """
 
-def gen_login_py_tailwind(login_name, models):
+def _gen_login_py_html(login_name, models, default_endpoint, tailwind):
     first_model = models[0]
+    if tailwind:
+        blueprint = f'{login_name}_bp = Blueprint("{login_name}", __name__, template_folder="templates")'
+    else:
+        blueprint = (
+            f'{login_name}_bp = Blueprint("{login_name}", __name__, '
+            f'template_folder="templates", static_folder="static", '
+            f'static_url_path="/{login_name}/static")'
+        )
     return f"""\
 from flask import Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_user, logout_user, login_required
-from models import {models_import(models)}
-from extensions import login_manager
+from werkzeug.security import check_password_hash
 
-{login_name}_bp = Blueprint("{login_name}", __name__, template_folder="templates")
+from extensions import db, login_manager
+from models import {first_model}
 
-@login_manager.user_loader
-def load_user(user_id):
-    return {first_model}.query.get(int(user_id))
+{blueprint}
 
+{_gen_user_loader(first_model)}
 @{login_name}_bp.route("/{login_name}", methods=["GET", "POST"])
 def {login_name}():
     if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-
-        if username and password:
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
+        
+        if not username or not password:
+            flash("Preencha usuário e senha.")
+        else:
             user = {first_model}.query.filter_by(username=username).first()
-            if user:
+            
+            if user and check_password_hash(user.password_hash, password):
                 login_user(user)
-                return redirect(url_for("home.home"))
-
-        flash("Credenciais inválidas")
+                
+                return redirect(url_for("{default_endpoint}"))
+                
+            flash("Credenciais inválidas.")
 
     return render_template("{login_name}.html")
 
-@{login_name}_bp.route("/logout")
+@{login_name}_bp.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
+    
     return redirect(url_for("{login_name}.{login_name}"))
 """
 
-def gen_login_py_plain(login_name, models):
-    first_model = models[0]
+def gen_login_py_tailwind(login_name, models, default_endpoint="home.home"):
+    return _gen_login_py_html(login_name, models, default_endpoint, True)
+
+def gen_login_py_plain(login_name, models, default_endpoint="home.home"):
+    return _gen_login_py_html(login_name, models, default_endpoint, False)
+
+def _gen_login_template(login_name, plain=False):
+    stylesheet = ""
+    if plain:
+        stylesheet = (
+            "{% block head %}\n"
+            f"<link rel=\"stylesheet\" href=\"{{{{ url_for('{login_name}.static', filename='css/style.css') }}}}\">\n"
+            "{% endblock %}\n"
+        )
     return f"""\
-from flask import Blueprint, render_template, redirect, url_for, request, flash
-from flask_login import login_user, logout_user, login_required
-from models import {models_import(models)}
-from extensions import login_manager
+{{% extends "base.html" %}}
 
-{login_name}_bp = Blueprint("{login_name}", __name__, template_folder="templates", static_folder="static", static_url_path="/{login_name}/static")
+{{% block title %}}Login{{% endblock %}}
+{stylesheet}
+{{% block content %}}
+{{% with messages = get_flashed_messages() %}}
+    {{% if messages %}}
+        <div role="alert">{{{{ messages[0] }}}}</div>
+    {{% endif %}}
+{{% endwith %}}
 
-@login_manager.user_loader
-def load_user(user_id):
-    return {first_model}.query.get(int(user_id))
-
-@{login_name}_bp.route("/{login_name}", methods=["GET", "POST"])
-def {login_name}():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-
-        if username and password:
-            user = {first_model}.query.filter_by(username=username).first()
-            if user:
-                login_user(user)
-                return redirect(url_for("home.home"))
-
-        flash("Credenciais inválidas")
-
-    return render_template("{login_name}.html")
-
-@{login_name}_bp.route("/logout")
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for("{login_name}.{login_name}"))
+<form method="post">
+    <label for="username">Usuário</label>
+    <input id="username" type="text" name="username" autocomplete="username" required>
+    <label for="password">Senha</label>
+    <input id="password" type="password" name="password" autocomplete="current-password" required>
+    <button type="submit">Entrar</button>
+</form>
+{{% endblock %}}
 """
 
 def gen_login_template_cdn(login_name):
-    return f"""\
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Login</title>
-</head>
-
-<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center">
-    <div class="bg-gray-800 p-8 rounded-lg shadow-lg w-full max-w-md">
-        <h1 class="text-3xl font-bold text-green-400 mb-6 text-center">
-            🔐 Login
-        </h1>
-
-        {{% with messages = get_flashed_messages() %}}
-            {{% if messages %}}
-                <div class="bg-red-600 text-white p-3 rounded mb-4">
-                    {{{{ messages[0] }}}}
-                </div>
-            {{% endif %}}
-        {{% endwith %}}
-
-        <form method="POST" class="space-y-4">
-            <input type="text" name="username" placeholder="Usuário" required
-                   class="w-full p-3 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:border-green-400 focus:outline-none">
-
-            <input type="password" name="password" placeholder="Senha" required
-                   class="w-full p-3 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:border-green-400 focus:outline-none">
-
-            <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded transition duration-200">
-                Entrar
-            </button>
-        </form>
-    </div>
-    <script src="https://cdn.tailwindcss.com" defer></script>
-</body>
-</html>
-"""
+    return _gen_login_template(login_name)
 
 def gen_login_template_build(login_name):
-    return f"""\
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Login</title>
-
-    <link rel="stylesheet" href="{{{{ url_for('static', filename='css/output.css') }}}}">
-</head>
-
-<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center">
-    <div class="bg-gray-800 p-8 rounded-lg shadow-lg w-full max-w-md">
-        <h1 class="text-3xl font-bold text-green-400 mb-6 text-center">
-            🔐 Login
-        </h1>
-
-        {{% with messages = get_flashed_messages() %}}
-            {{% if messages %}}
-                <div class="bg-red-600 text-white p-3 rounded mb-4">
-                    {{{{ messages[0] }}}}
-                </div>
-            {{% endif %}}
-        {{% endwith %}}
-
-        <form method="POST" class="space-y-4">
-            <input type="text" name="username" placeholder="Usuário" required
-                   class="w-full p-3 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:border-green-400 focus:outline-none">
-
-            <input type="password" name="password" placeholder="Senha" required
-                   class="w-full p-3 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:border-green-400 focus:outline-none">
-
-            <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded transition duration-200">
-                Entrar
-            </button>
-        </form>
-    </div>
-</body>
-</html>
-"""
+    return _gen_login_template(login_name)
 
 def gen_login_template_plain(login_name):
-    return f"""\
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Login</title>
-
-    <link rel="stylesheet" href="{{{{ url_for('{login_name}.static', filename='css/style.css') }}}}">
-</head>
-
-<body>
-    <div class="container">
-        <h1>Página de Login</h1>
-
-        {{% with messages = get_flashed_messages() %}}
-            {{% if messages %}}
-                <div class="error">{{{{ messages[0] }}}}</div>
-            {{% endif %}}
-        {{% endwith %}}
-
-        <form method="POST">
-            <input type="text" name="username" placeholder="Usuário" required>
-            <input type="password" name="password" placeholder="Senha" required>
-            <button type="submit">Entrar</button>
-        </form>
-    </div>
-</body>
-</html>
-"""
+    return _gen_login_template(login_name, plain=True)
 
 def gen_extensions_py(login):
     lines = ["from flask_sqlalchemy import SQLAlchemy"]
@@ -778,10 +701,10 @@ def gen_extensions_py(login):
     return "\n".join(lines) + "\n"
 
 def gen_models_py(models, login):
-    lines = ["from extensions import db"]
     if login:
-        lines.append("from flask_login import UserMixin")
-    lines.append("")
+        lines = ["from flask_login import UserMixin", "", "from extensions import db", ""]
+    else:
+        lines = ["from extensions import db", ""]
 
     for i, model in enumerate(models):
         if login and i == 0:
@@ -789,6 +712,8 @@ def gen_models_py(models, login):
                 f"class {model}(db.Model, UserMixin):",
                 "    id = db.Column(db.Integer, primary_key=True)",
                 "    username = db.Column(db.String(80), unique=True, nullable=False)",
+                "    # Gere hashes com werkzeug.security.generate_password_hash().",
+                "    password_hash = db.Column(db.String(255), nullable=False)",
                 "    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())",
                 "",
                 "    def __repr__(self):",
@@ -808,9 +733,12 @@ def gen_models_py(models, login):
     return "\n".join(lines)
 
 def gen_package_json(project_name):
+    package_name = re.sub(r"[^a-z0-9._-]+", "-", Path(project_name).name.lower()).strip("-")
+    package_name = re.sub(r"^[^a-z0-9]+", "", package_name)
+    package_name = package_name or "flask-app"
     return f"""\
 {{
-  "name": "{project_name}",
+  "name": {json.dumps(package_name)},
   "version": "1.0.0",
   "description": "Flask app with Tailwind CSS",
   "scripts": {{
@@ -835,13 +763,13 @@ module.exports = {
 """
 
 def gen_gitignore(tailwind_build):
-    lines = ["__pycache__/", "*.pyc", "*.db"]
+    lines = ["__pycache__/", "*.pyc", "*.db", ".env", ".venv/", "venv/"]
     if tailwind_build:
-        lines += ["node_modules/", "src/", "tailwind.config.js", "package.json", "package-lock.json"]
+        lines.append("node_modules/")
     return "\n".join(lines) + "\n"
 
 def gen_requirements(db, login):
-    lines = ["Flask==2.3.3"]
+    lines = ["Flask==2.3.3", "python-dotenv"]
     if db:
         lines.append("Flask-SQLAlchemy==3.0.5")
     if login:
@@ -853,6 +781,26 @@ class CustomParser(argparse.ArgumentParser):
     def error(self, message):
         print(f"\n{ERROR_SYM} {c('RED', message)}")
         print(c('YELLOW', "Use -h ou --help para ver os comandos disponíveis"))
+        sys.exit(1)
+
+def _validate_identifier_names(values, label):
+    if not values:
+        print(f"\n{ERROR_SYM} {c('RED', f'Erro: informe pelo menos um nome para {label}.')}")
+        sys.exit(1)
+
+    invalid = [
+        value for value in values
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) or keyword.iskeyword(value)
+    ]
+    if invalid:
+        names = ", ".join(invalid)
+        print(f"\n{ERROR_SYM} {c('RED', f'Erro: nomes inválidos para {label}: {names}. Use identificadores Python.')}")
+        sys.exit(1)
+
+    duplicates = sorted({value for value in values if values.count(value) > 1})
+    if duplicates:
+        names = ", ".join(duplicates)
+        print(f"\n{ERROR_SYM} {c('RED', f'Erro: nomes duplicados para {label}: {names}.')}")
         sys.exit(1)
 
 def parse_args():
@@ -869,6 +817,7 @@ def parse_args():
 
     if not args or args[0] in ("-h", "--help"):
         show_help()
+        sys.exit(0)
 
     project_name = args[0]
     rest = args[1:]
@@ -887,6 +836,7 @@ def parse_args():
         arg = rest[i]
         if arg in ("-h", "--help"):
             show_help()
+            sys.exit(0)
         elif arg == "-r":
             if i + 1 < len(rest):
                 rotas = [r.strip() for r in rest[i + 1].split(",") if r.strip()]
@@ -931,6 +881,20 @@ def parse_args():
         print(f"\n{ERROR_SYM} {c('RED', 'Erro: --login requer -D com pelo menos um model (ex: -D User --login login)')}")
         sys.exit(1)
 
+    _validate_identifier_names(rotas, "rotas")
+    if db:
+        _validate_identifier_names(models, "models")
+    if login:
+        _validate_identifier_names([login_name], "rota de login")
+        if login_name == "logout":
+            print(f"\n{ERROR_SYM} {c('RED', 'Erro: a rota de login não pode se chamar logout.')}")
+            sys.exit(1)
+        conflicts = sorted(set(rotas) & {login_name, "logout"})
+        if conflicts:
+            names = ", ".join(conflicts)
+            print(f"\n{ERROR_SYM} {c('RED', f'Erro: rotas conflitantes com a autenticação: {names}.')}")
+            sys.exit(1)
+
     return project_name, rotas, models, db, api, login, login_name, tailwind, tailwind_type
 
 # ─── Main ────────────────────────────────────────────────────────
@@ -962,8 +926,13 @@ def main():
     # ── Estrutura base ──
     (projeto / "routes").mkdir(parents=True, exist_ok=True)
 
+    # ── .env e template base ──
+    write(projeto / ".env", f"SECRET_KEY={secrets.token_hex(32)}\n")
+    if not api:
+        write(projeto / "templates" / "base.html", gen_base_template(tailwind_type if tailwind else None))
+
     # ── main.py ──
-    write(projeto / "main.py", gen_main_py(db, login, login_name, models))
+    write(projeto / "main.py", gen_main_py(db, login, login_name))
 
     # ── routes/__init__.py ──
     write(projeto / "routes" / "__init__.py", gen_routes_init(rotas, login, login_name))
@@ -971,16 +940,15 @@ def main():
     # ── Criar rotas normais ──
     for rota in rotas:
         rota_dir = projeto / "routes" / rota
-        if tailwind:
+        if not api:
             (rota_dir / "templates").mkdir(parents=True, exist_ok=True)
-        else:
-            (rota_dir / "templates").mkdir(parents=True, exist_ok=True)
-            (rota_dir / "static" / "css").mkdir(parents=True, exist_ok=True)
+            if not tailwind:
+                (rota_dir / "static" / "css").mkdir(parents=True, exist_ok=True)
 
         if api:
-            write(rota_dir / f"{rota}.py", gen_route_py_api(rota, db, models))
+            write(rota_dir / f"{rota}.py", gen_route_py_api(rota))
         else:
-            write(rota_dir / f"{rota}.py", gen_route_py_html(rota, db, models, tailwind))
+            write(rota_dir / f"{rota}.py", gen_route_py_html(rota, tailwind))
 
             if tailwind and tailwind_type == "cdn":
                 write(rota_dir / "templates" / f"{rota}.html", gen_template_tailwind_cdn(rota))
@@ -999,11 +967,11 @@ def main():
             write(login_dir / f"{login_name}.py", gen_login_py_api(login_name, models))
         elif tailwind:
             (login_dir / "templates").mkdir(parents=True, exist_ok=True)
-            write(login_dir / f"{login_name}.py", gen_login_py_tailwind(login_name, models))
+            write(login_dir / f"{login_name}.py", gen_login_py_tailwind(login_name, models, f"{rotas[0]}.{rotas[0]}"))
         else:
             (login_dir / "templates").mkdir(parents=True, exist_ok=True)
             (login_dir / "static" / "css").mkdir(parents=True, exist_ok=True)
-            write(login_dir / f"{login_name}.py", gen_login_py_plain(login_name, models))
+            write(login_dir / f"{login_name}.py", gen_login_py_plain(login_name, models, f"{rotas[0]}.{rotas[0]}"))
 
         if not api:
             if tailwind and tailwind_type == "cdn":
